@@ -25,10 +25,26 @@ const App: React.FC = () => {
     transition: { duration: 0.1 }
   };
 
-  // دالة المشاركة الجديدة
+  // دالة إرسال الإشعار للمستلم عبر فاركاستر
+  const triggerNotification = async (target: string, emoji: string) => {
+    try {
+      // هذا الجزء يرسل طلباً للخلفية (Backend) لإرسال الإشعار الحقيقي لهاتف المستلم
+      await fetch('/api/send-notification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          targetUsername: target, 
+          message: `Someone sent you a stealth ${emoji}! 🕵️‍♂️` 
+        }),
+      });
+      console.log("Notification request sent to Farcaster");
+    } catch (e) {
+      console.error("Notification failed", e);
+    }
+  };
+
   const handleShare = () => {
-    const text = `Someone sent me an anonymous "${incomingEmoji.char}" on Stealth Protocol! 🕵️‍♂️✨\n\nWho was it? Send me one or check your own:`;
-    // استبدل الرابط أدناه برابط الـ Frame الخاص بك لاحقاً
+    const text = `Someone sent me an anonymous "${incomingEmoji.char}" on Stealth Protocol! 🕵️‍♂️✨\n\nWho was it? Check yours:`;
     const shareUrl = `https://warpcast.com/~/compose?text=${encodeURIComponent(text)}`;
     sdk.actions.openUrl(shareUrl);
   };
@@ -36,29 +52,35 @@ const App: React.FC = () => {
   const handleAction = async (type: 'MAIN' | 'PREMIUM' | 'RANDOM' | 'DIAMOND', emoji?: string) => {
     if (!username) { alert("Please enter @username first"); return; }
 
+    const selectedEmoji = emoji || (type === 'RANDOM' ? "🎲" : TOKEN_SYMBOL);
     let revealPrice = "0.25$";
     let actionDescription = "";
 
     switch (type) {
       case 'MAIN':
         revealPrice = "0.25$";
-        actionDescription = `Sent ${emoji} to @${username}. Free for you!`;
+        actionDescription = `Sent ${selectedEmoji} to @${username}.`;
         break;
       case 'PREMIUM':
         revealPrice = "1$";
-        actionDescription = `Stealth ${TOKEN_SYMBOL} sent! This requires $${TOKEN_SYMBOL} holdings.`;
+        actionDescription = `Stealth ${TOKEN_SYMBOL} sent!`;
         break;
       case 'RANDOM':
         revealPrice = "1$";
         actionDescription = `Random Chaos sent to @${username}!`;
         break;
       case 'DIAMOND':
-        alert(`💖 This will cost you $100 to send.\nTarget @${username} will get a special alert.`);
+        alert(`💖 High-Priority Alert! Sending $100 love alert to @${username}.`);
+        // إرسال إشعار فوري للمستلم
+        triggerNotification(username, "💎💖");
         return;
     }
 
+    // تشغيل الإشعار فوراً للمستلم عند أي عملية إرسال
+    triggerNotification(username, selectedEmoji);
+
     console.log(`Saving to DB: From Me to ${username}, Price to reveal: ${revealPrice}`);
-    alert(`✅ ${actionDescription}\n\nThey must pay ${revealPrice} to see your name.`);
+    alert(`✅ ${actionDescription}\n\nNotification sent to their Farcaster! They must pay ${revealPrice} to see your name.`);
   };
 
   return (
@@ -133,7 +155,6 @@ const App: React.FC = () => {
               Pay {incomingEmoji.type === "NORMAL" ? "0.25$" : "1$"} to reveal their identity.
             </p>
             
-            {/* أزرار الأكشن: كشف ومشاركة */}
             <div style={{display: 'flex', gap: '10px', marginTop: '15px'}}>
               <motion.button 
                 onClick={() => alert(`Redirecting to payment...`)} 
