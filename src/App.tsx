@@ -1,8 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import sdk from '@farcaster/frame-sdk';
 import { motion } from 'framer-motion';
+import { createClient } from '@supabase/supabase-js';
 
-// إعدادات الثوابت
+// 1. إعداد Supabase (سيقرأ المفاتيح من Vercel تلقائياً)
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
 const WALLET = "0x51D0b8CA143E23889b7F41a6f35B47857a9E43F6";
 const TOKEN_SYMBOL = "🖕"; 
 const MAIN_EMOJIS = ["😈", "😏", "🤑", "🔥", "❤️", "🤭"];
@@ -25,26 +30,8 @@ const App: React.FC = () => {
     transition: { duration: 0.1 }
   };
 
-  // دالة إرسال الإشعار للمستلم عبر فاركاستر
-  const triggerNotification = async (target: string, emoji: string) => {
-    try {
-      // هذا الجزء يرسل طلباً للخلفية (Backend) لإرسال الإشعار الحقيقي لهاتف المستلم
-      await fetch('/api/send-notification', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          targetUsername: target, 
-          message: `Someone sent you a stealth ${emoji}! 🕵️‍♂️` 
-        }),
-      });
-      console.log("Notification request sent to Farcaster");
-    } catch (e) {
-      console.error("Notification failed", e);
-    }
-  };
-
   const handleShare = () => {
-    const text = `Someone sent me an anonymous "${incomingEmoji.char}" on Stealth Protocol! 🕵️‍♂️✨\n\nWho was it? Check yours:`;
+    const text = `Someone sent me an anonymous "${incomingEmoji.char}" on Stealth Protocol! 🕵️‍♂️✨\nWho was it? Check yours:`;
     const shareUrl = `https://warpcast.com/~/compose?text=${encodeURIComponent(text)}`;
     sdk.actions.openUrl(shareUrl);
   };
@@ -53,34 +40,48 @@ const App: React.FC = () => {
     if (!username) { alert("Please enter @username first"); return; }
 
     const selectedEmoji = emoji || (type === 'RANDOM' ? "🎲" : TOKEN_SYMBOL);
-    let revealPrice = "0.25$";
-    let actionDescription = "";
+    let revealPrice = type === 'DIAMOND' ? "100$" : (type === 'MAIN' ? "0.25$" : "1$");
+    const secretCode = `CONFESS-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    switch (type) {
-      case 'MAIN':
-        revealPrice = "0.25$";
-        actionDescription = `Sent ${selectedEmoji} to @${username}.`;
-        break;
-      case 'PREMIUM':
-        revealPrice = "1$";
-        actionDescription = `Stealth ${TOKEN_SYMBOL} sent!`;
-        break;
-      case 'RANDOM':
-        revealPrice = "1$";
-        actionDescription = `Random Chaos sent to @${username}!`;
-        break;
-      case 'DIAMOND':
-        alert(`💖 High-Priority Alert! Sending $100 love alert to @${username}.`);
-        // إرسال إشعار فوري للمستلم
-        triggerNotification(username, "💎💖");
-        return;
+    try {
+      // 2. إرسال البيانات فعلياً إلى Supabase
+      const { error } = await supabase.from('messages').insert([
+        { 
+          target_username: username, 
+          emoji: selectedEmoji, 
+          price: revealPrice,
+          sender_wallet: WALLET 
+        }
+      
+      ]);
+
+      if (type === 'DIAMOND') {
+        await supabase.from('secret_codes').insert([
+          { code: secretCode, target_username: username }
+        ]);
+        alert(`💖 DIAMOND ALERT SENT!\nYour Secret Code: ${secretCode}\nGive this to @${username} to reveal you!`);
+      } else {
+        alert(`✅ Sent ${selectedEmoji} to @${username}.\nNotification sent! They must pay ${revealPrice} to see your name.`);
+      }
+
+    } catch (err) {
+      console.error("Database error:", err);
+      alert("Error connecting to database.");
     }
+  };
 
-    // تشغيل الإشعار فوراً للمستلم عند أي عملية إرسال
-    triggerNotification(username, selectedEmoji);
+  const checkSecretCode = async () => {
+    if (!secretCodeInput) return;
+    const { data, error } = await supabase
+      .from('secret_codes')
+      .select('*')
+      .eq('code', secretCodeInput);
 
-    console.log(`Saving to DB: From Me to ${username}, Price to reveal: ${revealPrice}`);
-    alert(`✅ ${actionDescription}\n\nNotification sent to their Farcaster! They must pay ${revealPrice} to see your name.`);
+    if (data && data.length > 0) {
+      alert(`🔓 MATCH FOUND! This code was for @${data[0].target_username}`);
+    } else {
+      alert("❌ Invalid or expired code.");
+    }
   };
 
   return (
@@ -103,12 +104,7 @@ const App: React.FC = () => {
           <p style={styles.sectionTitle}>FREE SENDS (0.25$ to reveal)</p>
           <div style={styles.emojiGrid}>
             {MAIN_EMOJIS.map(e => (
-              <motion.button 
-                key={e} 
-                onClick={() => handleAction("MAIN", e)} 
-                style={styles.emojiBtn}
-                whileTap={tapAnimation}
-              >
+              <motion.button key={e} onClick={() => handleAction("MAIN", e)} style={styles.emojiBtn} whileTap={tapAnimation}>
                 {e}
               </motion.button>
             ))}
@@ -116,81 +112,41 @@ const App: React.FC = () => {
         </div>
 
         <div style={styles.actionGrid}>
-          <motion.button 
-            onClick={() => handleAction("RANDOM")} 
-            style={styles.actionCard}
-            whileTap={tapAnimation}
-          >
+          <motion.button onClick={() => handleAction("RANDOM")} style={styles.actionCard} whileTap={tapAnimation}>
             <span style={{fontSize: '20px'}}>🎲</span>
             <span>Random</span>
             <span style={styles.priceTag}>FREE</span>
           </motion.button>
-          <motion.button 
-            onClick={() => handleAction("PREMIUM")} 
-            style={styles.actionCard}
-            whileTap={tapAnimation}
-          >
+          <motion.button onClick={() => handleAction("PREMIUM")} style={styles.actionCard} whileTap={tapAnimation}>
             <span style={{fontSize: '20px'}}>{TOKEN_SYMBOL}</span>
             <span>Send ${TOKEN_SYMBOL}</span>
             <span style={styles.priceTag}>HOLDERS</span>
           </motion.button>
         </div>
 
-        <motion.button 
-          onClick={() => handleAction("DIAMOND")} 
-          style={styles.diamondMobileBtn}
-          whileTap={{...tapAnimation, background: ACTIVE_PURPLE}}
-        >
+        <motion.button onClick={() => handleAction("DIAMOND")} style={styles.diamondMobileBtn} whileTap={tapAnimation}>
           💎 Diamond Love Confession ($100)
         </motion.button>
 
         <div style={styles.receivedContainer}>
           <p style={styles.sectionTitle}>INCOMING STEALTH MESSAGES</p>
-          
           <div style={styles.receivedBox}>
             <div style={styles.bigEmoji}>{incomingEmoji.char}</div>
-            <p style={{fontSize: '11px', color: '#888'}}>
-              Someone is messing with you! 
-              <br/>
-              Pay {incomingEmoji.type === "NORMAL" ? "0.25$" : "1$"} to reveal their identity.
-            </p>
-            
+            <p style={{fontSize: '11px', color: '#888'}}>Someone is messing with you!<br/>Pay {incomingEmoji.type === "NORMAL" ? "0.25$" : "1$"} to reveal their identity.</p>
             <div style={{display: 'flex', gap: '10px', marginTop: '15px'}}>
-              <motion.button 
-                onClick={() => alert(`Redirecting to payment...`)} 
-                style={{...styles.mobileUnlockBtn, flex: 2, marginTop: 0}}
-                whileTap={{ scale: 1.05, backgroundColor: "#ddd" }}
-              >
-                UNLOCK 🔓
-              </motion.button>
-              <motion.button 
-                onClick={handleShare} 
-                style={{...styles.mobileUnlockBtn, flex: 1, marginTop: 0, background: 'transparent', border: `1px solid ${THEME_BLUE}`, color: THEME_BLUE}}
-                whileTap={{ scale: 1.05, backgroundColor: 'rgba(0, 212, 255, 0.1)' }}
-              >
-                SHARE 🔗
-              </motion.button>
+              <motion.button onClick={() => alert(`Redirecting to payment...`)} style={styles.mobileUnlockBtn}>UNLOCK 🔓</motion.button>
+              <motion.button onClick={handleShare} style={{...styles.mobileUnlockBtn, background: 'transparent', border: `1px solid ${THEME_BLUE}`, color: THEME_BLUE}}>SHARE 🔗</motion.button>
             </div>
           </div>
 
           <div style={{...styles.receivedBox, marginTop: '15px', borderColor: ACTIVE_PURPLE, background: 'rgba(98, 0, 238, 0.05)'}}>
             <p style={{fontSize: '11px', color: ACTIVE_PURPLE, fontWeight: 'bold', marginBottom: '10px'}}>💎 HAVE A SECRET DIAMOND CODE?</p>
-            <input 
-              placeholder="Enter KISS-XXXX Code" 
-              value={secretCodeInput} 
-              onChange={(e) => setSecretCodeInput(e.target.value)} 
-              style={{...styles.mobileInput, marginBottom: '10px', padding: '12px', fontSize: '14px', textAlign: 'center'}}
-            />
-            <motion.button 
-              onClick={() => alert(`Checking code: ${secretCodeInput}`)} 
-              style={{...styles.mobileUnlockBtn, background: ACTIVE_PURPLE, color: '#fff'}}
-              whileTap={tapAnimation}
-            >
+            <input placeholder="Enter CONFESS-XXXX Code" value={secretCodeInput} onChange={(e) => setSecretCodeInput(e.target.value)} style={{...styles.mobileInput, marginBottom: '10px', textAlign: 'center'}} />
+            <motion.button onClick={checkSecretCode} style={{...styles.mobileUnlockBtn, background: ACTIVE_PURPLE, color: '#fff'}} whileTap={tapAnimation}>
               DECRYPT CONFESSION 💖
             </motion.button>
           </div>
         </div>
-
       </div>
     </div>
   );
@@ -213,8 +169,8 @@ const styles = {
   diamondMobileBtn: { width: '100%', padding: '18px', background: `linear-gradient(45deg, #004e92, ${THEME_BLUE})`, border: 'none', borderRadius: '16px', color: '#fff', fontWeight: 'bold' as const, cursor: 'pointer' },
   receivedContainer: { marginTop: '10px', paddingBottom: '30px' },
   receivedBox: { background: '#0a0a0a', padding: '20px', borderRadius: '20px', border: '1px solid #1a1a1a', textAlign: 'center' as const },
-  bigEmoji: { fontSize: '50px', marginBottom: '10px', filter: `drop-shadow(0 0 10px rgba(0,212,255,0.3))` },
-  mobileUnlockBtn: { width: '100%', marginTop: '15px', padding: '14px', background: '#fff', color: '#000', borderRadius: '12px', fontWeight: 'bold' as const, border: 'none', cursor: 'pointer' }
+  bigEmoji: { fontSize: '50px', marginBottom: '10px' },
+  mobileUnlockBtn: { width: '100%', padding: '14px', background: '#fff', color: '#000', borderRadius: '12px', fontWeight: 'bold' as const, border: 'none', cursor: 'pointer' }
 };
 
 export default App;
